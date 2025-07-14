@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>⚡ Delhi EV Charger Locator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.2/mapbox-gl-geocoder.min.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.2/mapbox-gl-geocoder.css" rel="stylesheet" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', sans-serif; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: white;
+      padding: 12px 16px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 999;
+      max-width: 90%;
+      width: fit-content;
+    }
+
+    .geocoder {
+      flex: 1 1 180px;
+      min-width: 140px;
+    }
+
+    button {
+      background: #007aff;
+      color: white;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      flex: 1 1 120px;
+    }
+
+    #status {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: white;
+      padding: 10px 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      font-weight: bold;
+      z-index: 999;
+      font-size: 14px;
+      text-align: center;
+      max-width: 90%;
+    }
+
+    .marker, .found-marker {
+      background-image: url('/Locator.jpg');
+      background-size: contain;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+
+    .mapboxgl-popup-content {
+      font-size: 14px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      padding: 10px;
+      max-width: 260px;
+      word-wrap: break-word;
+    }
+
+    @media (max-width: 768px) {
+      #controls {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 10px 12px;
+        gap: 8px;
+      }
+
+      button {
+        width: 100%;
+        font-size: 15px;
+      }
+
+      .geocoder {
+        min-width: unset;
+        width: 100%;
+      }
+
+      #status {
+        font-size: 13px;
+        padding: 8px 16px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #controls {
+        top: 8px;
+        padding: 8px 10px;
+        gap: 6px;
+      }
+
+      button {
+        padding: 9px 14px;
+        font-size: 14px;
+      }
+
+      #status {
+        bottom: 16px;
+        font-size: 12px;
+        padding: 8px 14px;
+      }
+
+      .mapboxgl-popup-content {
+        font-size: 13px;
+        padding: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controls">
+    <div id="startGeocoder" class="geocoder"></div>
+    <div id="endGeocoder" class="geocoder"></div>
+    <button id="routeBtn">🚗 Show Route & Scan</button>
+  </div>
+  <div id="status">📍 Ready</div>
+
+  <script>
+    mapboxgl.accessToken = 'pk.eyJ1Ijoia2Fyb2NoYXJnZTIwMjIiLCJhIjoiY21hOGh5MHoxMWJ5ZDJqc2Q4d2xkYjNqdSJ9.Vm10xVtUb5saUlITtMn1wg';
+    const ocmAppName = 'Karocharge123';
+    const ocmApiKey = '38406042-8a6d-4507-b8ee-27e83305e931';
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [77.2090, 28.6139],
+      zoom: 11
+    });
+
+    let foundChargerMarkers = [];
+    let startCoords = null;
+    let endCoords = null;
+
+    function buildURL(centerCoord, radiusInKm) {
+      return `https://api.openchargemap.io/v3/poi/?client=${ocmAppName}&key=${ocmApiKey}&output=json&latitude=${centerCoord[1]}&longitude=${centerCoord[0]}&distance=${radiusInKm}&distanceunit=KM&maxresults=50`;
+    }
+
+    async function fetchChargers(centerCoord, radiusInKm) {
+      const url = buildURL(centerCoord, radiusInKm);
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('OCM request failed');
+        return await res.json();
+      } catch (err) {
+        console.error('Error fetching chargers:', err);
+        return [];
+      }
+    }
+
+
+async function animateScanAlongRoute(coords) {
+  const visited = new Set();
+  let total = 0;
+
+  // Interpolate route: break into ~1km segments
+  function interpolateCoords(inputCoords) {
+    const interpolate = [];
+    for (let i = 0; i < inputCoords.length - 1; i++) {
+      const [lon1, lat1] = inputCoords[i];
+      const [lon2, lat2] = inputCoords[i + 1];
+      const steps = 10; // how many in-between points
+      for (let j = 0; j < steps; j++) {
+        const lng = lon1 + ((lon2 - lon1) * j) / steps;
+        const lat = lat1 + ((lat2 - lat1) * j) / steps;
+        interpolate.push([lng, lat]);
+      }
+    }
+    interpolate.push(inputCoords[inputCoords.length - 1]);
+    return interpolate;
+  }
+
+  const smoothCoords = interpolateCoords(coords);
+  document.getElementById('status').textContent = `🔄 Scanning route & plotting chargers...`;
+
+  for (let i = 0; i < smoothCoords.length; i += 10) {
+    const point = smoothCoords[i];
+
+    map.getSource('scan-circle').setData({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: point },
+      properties: { radius: 5000 }
+    });
+
+    const chargers = await fetchChargers(point, 5);
+    chargers.forEach(ch => {
+      const id = ch.ID;
+      if (visited.has(id)) return;
+      visited.add(id);
+      total++;
+
+      const el = document.createElement('div');
+      el.className = 'found-marker';
+
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+        <strong>${ch.AddressInfo.Title}</strong><br/>
+        📍 ${ch.AddressInfo.AddressLine1 || 'No address'}<br/>
+        🔌 ${ch.Connections?.map(c => `${c.ConnectionType?.Title} (${c.PowerKW || 'N/A'} kW)`).join(', ') || 'N/A'}
+      `);
+
+      new mapboxgl.Marker(el)
+        .setLngLat([ch.AddressInfo.Longitude, ch.AddressInfo.Latitude])
+        .setPopup(popup)
+        .addTo(map);
+
+      foundChargerMarkers.push(el);
+    });
+
+    document.getElementById('status').textContent = `📍 Scanning ${i}/${smoothCoords.length} | ⚡ Found ${total}`;
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  document.getElementById('status').textContent = total > 0
+    ? `✅ ${total} chargers plotted along the route`
+    : `⚠️ No chargers found on this route`;
+}
+
+
+
+    function drawRoute() {
+      foundChargerMarkers.forEach(marker => marker.remove());
+      foundChargerMarkers = [];
+
+      if (!startCoords || !endCoords) return alert("Please select both start and end locations.");
+
+      document.getElementById('status').textContent = "📍 Locating route...";
+      new mapboxgl.Marker({ color: 'green' }).setLngLat(startCoords).addTo(map);
+      new mapboxgl.Marker({ color: 'red' }).setLngLat(endCoords).addTo(map);
+
+      fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${startCoords.join(',')};${endCoords.join(',')}?geometries=geojson&access_token=${mapboxgl.accessToken}`)
+        .then(r => r.json())
+        .then(data => {
+          const route = data.routes[0]?.geometry;
+          if (!route) return alert("Route not found");
+
+          map.getSource('route').setData({
+            type: 'FeatureCollection',
+            features: [{ type: 'Feature', geometry: route }]
+          });
+
+          const bounds = route.coordinates.reduce(
+            (b, c) => b.extend(c),
+            new mapboxgl.LngLatBounds(route.coordinates[0], route.coordinates[0])
+          );
+          map.fitBounds(bounds, { padding: 50 });
+
+          animateScanAlongRoute(route.coordinates);
+        });
+    }
+
+    map.on('load', () => {
+      map.addSource('route', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+
+      map.addLayer({
+        id: 'route-line',
+        type: 'line',
+        source: 'route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#007aff', 'line-width': 5 }
+      });
+
+      map.addSource('scan-circle', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [77.2090, 28.6139] },
+          properties: { radius: 5000 }
+        }
+      });
+
+      map.addLayer({
+        id: 'scan-layer',
+        type: 'circle',
+        source: 'scan-circle',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 0, 0, 20, ['*', ['get', 'radius'], 0.05]],
+          'circle-color': '#007aff',
+          'circle-opacity': 0.2
+        }
+      });
+
+      const startGeocoder = new MapboxGeocoder({
+        accessToken: mapboxgl.accessToken,
+        placeholder: '🚦 Start Location',
+        mapboxgl: mapboxgl,
+        marker: false,
+        limit: 5,
+        proximity: { longitude: 77.2090, latitude: 28.6139 }
+      });
+      document.getElementById('startGeocoder').appendChild(startGeocoder.onAdd(map));
+      startGeocoder.on('result', e => startCoords = e.result.center);
+      startGeocoder.on('clear', () => startCoords = null);
+
+      const endGeocoder = new MapboxGeocoder({
+        accessToken: mapboxgl.accessToken,
+        placeholder: '🏁 End Location',
+        mapboxgl: mapboxgl,
+        marker: false,
+        limit: 5,
+        proximity: { longitude: 77.2090, latitude: 28.6139 }
+      });
+      document.getElementById('endGeocoder').appendChild(endGeocoder.onAdd(map));
+      endGeocoder.on('result', e => endCoords = e.result.center);
+      endGeocoder.on('clear', () => endCoords = null);
+
+      document.getElementById('routeBtn').addEventListener('click', drawRoute);
+    });
+  </script>
+</body>
+</html>
