@@ -118,9 +118,22 @@ Pull requests are welcome! For major changes, please open an issue first.
 
 ---
 
-## 📜 License
+## License & Copyright
 
-[MIT](LICENSE)
+© 2025 Vintara Project Team. All rights reserved.
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+You are free to use, modify, and distribute this software under the terms of the MIT License. However, please give appropriate credit to the original authors and do not use this project for unlawful or unethical purposes.
+
+---
+
+**Note:**  
+- Redistribution of this code or any derived work must include this copyright notice.  
+- Commercial use is allowed under the license, but attribution is required.  
+- No warranty is provided. Use at your own risk.
+
+For any questions about licensing, please contact the project maintainers.
 
 ---
 
